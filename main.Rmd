@@ -101,6 +101,7 @@ sample_sampling <- vabba2 %>%
   filter(locality %in% locations_assigned$locality) %>%
   distinct(sei, locality, duration, observers) %>%
   left_join(select(locations_assigned, locality, sampleID), by = "locality") %>%
+  replace_na(list(duration = 1, observers = 1)) %>%
   group_by(sampleID) %>%
   summarise(locs = length(unique(locality)),
             obshrs = sum(duration*observers/60),
@@ -117,7 +118,7 @@ sample_vars <- sample_climate %>%
   rename(elev = elev_mean, 
          temp_mean = temp_mean_mean, temp_var = temp_var_mean,
          precip_tot = precip_mean_mean, precip_var = precip_var_mean) %>%
-  select(sampleID, elev, temp_mean, temp_var, precip_tot, precip_var) %>%
+  select(sampleID, lat, long, elev, temp_mean, temp_var, precip_tot, precip_var) %>%
   left_join(
     sample_land %>%
       mutate(sampleID = fid) %>%
@@ -157,33 +158,68 @@ obs <- obs %>%
 
 # Occurrence models
 
-We will fit occurrence and abundance models for each species. Here, we will try a test model for the Northern Flicker.
+We will fit occurrence and abundance models for each species. Here, we will try a test model for the Northern Flicker. Note that landcover classes 12, 72, 73, 74 were removed due to lack of variation.
 
 ```{r}
+species <- "Northern Flicker"
+
 dat <- obs %>%
-  filter(taxa == "Northern Flicker") %>%
+  filter(taxa == species) %>%
   group_by(sampleID) %>%
-  summarise(occur = 1, abun = sum(count),
-            lat = mean(lat), long = mean(long)) %>%
-  right_join(sample_vars, by = "sampleID", ) %>%
+  summarise(occur = 1, abun = sum(count)) %>%
+  right_join(sample_vars, by = "sampleID") %>%
   replace_na(list(occur = 0, abun = 0))
 
 fit_occur <- mgcv::gam(
   occur ~
-    s(long, lat, bs = "sos") +
-    s(elev, bs = "cr") + 
+    s(elev, bs = "cr") +
     s(temp_mean, bs = "cr") + s(temp_var, bs = "cr") +
     s(precip_tot, bs = "cr") + s(precip_var, bs = "cr") +
     s(locs, bs = "cr") + s(obshrs, bs = "cr") + s(events, bs = "cr") +
-    s(lc_11_pct, bs = "cr") + s(lc_12_pct, bs = "cr") + s(lc_21_pct, bs = "cr") +
+    s(lc_11_pct, bs = "cr") + s(lc_21_pct, bs = "cr") +
     s(lc_22_pct, bs = "cr") + s(lc_23_pct, bs = "cr") + s(lc_24_pct, bs = "cr") +
     s(lc_31_pct, bs = "cr") + s(lc_41_pct, bs = "cr") + s(lc_42_pct, bs = "cr") +
     s(lc_43_pct, bs = "cr") + s(lc_52_pct, bs = "cr") + s(lc_71_pct, bs = "cr") +
-    s(lc_72_pct, bs = "cr") + s(lc_73_pct, bs = "cr") + s(lc_74_pct, bs = "cr") +
     s(lc_81_pct, bs = "cr") + s(lc_82_pct, bs = "cr") + s(lc_90_pct, bs = "cr") +
     s(lc_95_pct, bs = "cr"),
-  family = binomial, 
+  family = binomial,
   data = dat
 )
+
+dat[, paste(species, "occur")] <- predict(fit_occur, 
+                                          newdata = dat %>% mutate(locs = 10, obshrs = 10, events = 10), 
+                                          type = "response")
+
+dat %>%
+  ggplot(aes(x = long, y = lat, color = `Northern Flicker occur`)) +
+  geom_point() +
+  coord_equal() +
+  scale_color_gradientn(colors = c("#fffff0", "#d3ecb6", "#78c8b4", "#3090b2", "#614682"))
+
+fit_abun <- mgcv::gam(
+  abun ~
+    s(elev, bs = "cr") +
+    s(temp_mean, bs = "cr") + s(temp_var, bs = "cr") +
+    s(precip_tot, bs = "cr") + s(precip_var, bs = "cr") +
+    s(locs, bs = "cr") + s(obshrs, bs = "cr") + s(events, bs = "cr") +
+    s(lc_11_pct, bs = "cr") + s(lc_21_pct, bs = "cr") +
+    s(lc_22_pct, bs = "cr") + s(lc_23_pct, bs = "cr") + s(lc_24_pct, bs = "cr") +
+    s(lc_31_pct, bs = "cr") + s(lc_41_pct, bs = "cr") + s(lc_42_pct, bs = "cr") +
+    s(lc_43_pct, bs = "cr") + s(lc_52_pct, bs = "cr") + s(lc_71_pct, bs = "cr") +
+    s(lc_81_pct, bs = "cr") + s(lc_82_pct, bs = "cr") + s(lc_90_pct, bs = "cr") +
+    s(lc_95_pct, bs = "cr"),
+  family = poisson,
+  data = dat
+)
+
+dat[, paste(species, "abun")] <- predict(fit_abun, 
+                                          newdata = dat %>% mutate(locs = 10, obshrs = 10, events = 10), 
+                                          type = "response")
+
+dat %>%
+  ggplot(aes(x = long, y = lat, color = `Northern Flicker abun`)) +
+  geom_point() +
+  coord_equal() +
+  scale_color_gradientn(colors = c("#fffff0", "#d3ecb6", "#78c8b4", "#3090b2", "#614682"))
 ```
 
