@@ -1,0 +1,143 @@
+---
+title: "Predictive ability of urban metrix"
+author: "OD & CW"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Bird data
+
+We use the Virginia Breeding Bird Alas 2 ([VABBA2](https://vabirdatlas.org/)) data extracted from eBird using the VABBA2 project identifier using the following code applied to raw eBird dataset from Virginia:
+
+```{r eval = F}
+library(duckdb)
+
+con <- dbConnect(
+  duckdb(),
+  dbdir = "processing.duckdb"
+)
+query <- "
+  COPY (
+    SELECT
+      *
+    FROM read_csv_auto('./data/ebd/ebd_US-VA_201801_202212_smp_relJul-2026.txt', types={'PROJECT IDENTIFIERS': 'VARCHAR'})
+    WHERE \"PROJECT IDENTIFIERS\" LIKE '%1002%'
+  )
+  TO './data/ebd/vabba.tsv'
+  (FORMAT CSV, HEADER TRUE, DELIMITER '\t')
+  "
+dbExecute(con, query)
+dbDisconnect(con, shutdown = TRUE)
+remove(con)
+remove(query)
+```
+
+To get started with the localities and buffers for the study, we will want to get an idea of spatial distribution of VABBA2 observations. Let's pull all unique localities from this study.
+
+```{r}
+vabba2 <- read_tsv("./data/ebd/vabba.tsv")
+
+# clean the columns that we will not need
+
+vabba2 <- vabba2 %>%
+  filter(CATEGORY == "species", 
+         `ALL SPECIES REPORTED` == 1) %>%
+  select(`TAXONOMIC ORDER`, `COMMON NAME`, `OBSERVATION COUNT`, `LOCALITY ID`, LATITUDE, LONGITUDE,
+         `OBSERVATION DATE`, `TIME OBSERVATIONS STARTED`, `OBSERVER ID`, `SAMPLING EVENT IDENTIFIER`,
+         `OBSERVATION TYPE`, `DURATION MINUTES`, `EFFORT DISTANCE KM`, `NUMBER OBSERVERS`) %>%
+  rename(taxa_id = `TAXONOMIC ORDER`, taxa = `COMMON NAME`, count = `OBSERVATION COUNT`, 
+         locality = `LOCALITY ID`, lat = LATITUDE, long = LONGITUDE,
+         date = `OBSERVATION DATE`, time = `TIME OBSERVATIONS STARTED`, observer = `OBSERVER ID`, sei = `SAMPLING EVENT IDENTIFIER`,
+         protocol = `OBSERVATION TYPE`, duration = `DURATION MINUTES`, distance = `EFFORT DISTANCE KM`, observers = `NUMBER OBSERVERS`)
+
+# isolate unique locations
+
+locations <- vabba2 %>%
+  group_by(locality, lat, long) %>%
+  summarise(n = length(unique(sei))) %>%
+  ungroup()
+
+# write out
+
+locations %>% write_csv("./data/ebd/locations.csv")
+```
+
+VABBA2 sampling coverage was estimated using kernel density estimation ("Heatmap" QGIS 3.34.4 tool) with a 5,000 m radius weighted by number of unique sampling event identifiers via quartic kernel shape and using WGS84/UTM18N CRS (EPSG:32618). Sampling hotspots were identified as pixels with at least 10 observations, and the sampling points were only distributed within such hotspots.
+
+We used the NLCD 2019 to stratify by urbanization level. We assumed 0.9 impervious area for pixels with value 24, 0.65 -- for 23, 0.35 -- for 22, 0.1 -- for 21, and 0 for any other value. Raster resolution was reduced to 1000 m via nearest neighbor. The output raster was then polygonized, dissolved by value, and split into separate vectors. Those vectors were clipped by the extent of the sampling hotspots.
+
+As we stratify sampling points by urbanization, we fit random points within pixels with any amount of impervious area and outside of them. Within reasonably sampled hotspots, we had 39,146 km2 of non-urban area and 6,706 km2 of urban land. Given a radius of 2.5 km, it translates to roughly 19.6 km2 area, which we will round up to 20 km2. Thus, we could fit 6,706/20 = 335 random points within urbanized areas and the same number -- in non-urbanized areas. These points and their 2.5-km non-overlapping buffers will be used as independent sampling points throughout this project, denoted as a `sampleID`.
+
+Now we can download the data on VABBA2 localities intercepting the buffers.
+
+```{r}
+locations_assigned <- read_csv("./data/gis/locations_samples.csv")
+```
+
+# Climate data
+
+Climatic variables and elevation data were pulled from the [Worldclim](https://www.worldclim.org/data/bioclim.html) dataset. We used QGIS zonal statistics to estimate pixel-mean values for each sampleID for annual mean temperature (band 1), temperature seasonality (band 4), annual precipitation (band 12), precipitation seasonality (band 15), and elevation:
+
+```{r}
+sample_climate <- read_csv("./data/gis/buffers_climate.csv")
+```
+
+This can also be coupled with percentages of NLCD land cover types, mimicing the approach used by [VABBA2](https://vabirdatlas.org/methods-and-results/analytical-methods/) to model species occurences.
+
+```{r}
+sample_land <- read_csv("./data/gis/nlcd_all_classes.csv")
+```
+
+# Sampling effort
+
+As a final piece of puzzle, we will add the sampling effort within each sampleID in terms of number of locations sampled, observer-hours, and sampling events.
+
+```{r}
+sample_sampling <- vabba2 %>%
+  filter(locality %in% locations_assigned$locality) %>%
+  distinct(sei, locality, duration, observers) %>%
+  left_join(select(locations_assigned, locality, sampleID), by = "locality") %>%
+  group_by(sampleID) %>%
+  summarise(locs = length(unique(locality)),
+            obshrs = sum(duration*observers/60),
+            events = length(unique(sei)))
+```
+
+# Bird occurrence covariates
+
+Now we combine all of these data into one master dataset.
+
+```{r}
+sample_vars <- sample_climate %>%
+  mutate(sampleID = fid) %>%
+  rename(elev = elev_mean, 
+         temp_mean = temp_mean_mean, temp_var = temp_var_mean,
+         precip_tot = precip_mean_mean, precip_var = precip_var_mean) %>%
+  select(sampleID, elev, temp_mean, temp_var, precip_tot, precip_var) %>%
+  left_join(
+    sample_land %>%
+      mutate(sampleID = fid) %>%
+      select(sampleID, lc_11_pct, lc_12_pct, lc_21_pct, lc_22_pct, lc_23_pct, 
+             lc_24_pct, lc_31_pct, lc_41_pct, lc_42_pct, lc_43_pct, 
+             lc_52_pct, lc_71_pct, lc_72_pct, lc_73_pct, lc_74_pct, 
+             lc_81_pct, lc_82_pct, lc_90_pct, lc_95_pct, 
+             developed_pct, impervious_weighted_pct),
+    "sampleID"
+  ) %>%
+  left_join(sample_sampling, "sampleID")
+
+sample_vars %>% write_csv("SAMPLE_VARS.csv")
+```
+
+# Extracting bird occurrence
+
+```{r}
+vabba2 %>%
+  filter(locality %in% locations_assigned$locality) %>%
+  left_join()
+```
+

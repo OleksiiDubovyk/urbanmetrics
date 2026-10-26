@@ -1,0 +1,11 @@
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+data/ebd/ebd_US-VA_201801_202212_smp_relJul-2026.txt
+data/ebd/vabba.tsv
+data/gis/va_imparea_orig.tif
+data/gis/wc2.1_30s_elev.tif
+data/gis/virginia_nlcd.tif
+data/gis/vabba_coverage
+data/gis/wc2.1_30s_bio
