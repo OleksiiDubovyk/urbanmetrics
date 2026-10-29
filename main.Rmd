@@ -223,3 +223,60 @@ dat %>%
   scale_color_gradientn(colors = c("#fffff0", "#d3ecb6", "#78c8b4", "#3090b2", "#614682"))
 ```
 
+Now we can streamline this process for all taxa.
+
+```{r}
+taxanames <- unique(obs$taxa_id)
+
+pred_occurrence <- map(
+  taxanames,
+  function(tx){
+    
+    cat(paste(tx, "\n"))
+    
+    dat <- obs %>%
+      filter(taxa_id == tx) %>%
+      group_by(sampleID) %>%
+      summarise(occur = 1, abun = sum(count)) %>%
+      right_join(sample_vars, by = "sampleID") %>%
+      replace_na(list(occur = 0, abun = 0)) %>%
+      arrange(sampleID)
+    
+    result <- tryCatch(
+      {
+        fit_occur <- mgcv::bam(
+          occur ~
+            s(elev, bs = "cr") +
+            s(temp_mean, bs = "cr") + s(temp_var, bs = "cr") +
+            s(precip_tot, bs = "cr") + s(precip_var, bs = "cr") +
+            s(locs, bs = "cr") + s(obshrs, bs = "cr") + s(events, bs = "cr") +
+            s(lc_11_pct, bs = "cr") + s(lc_21_pct, bs = "cr") +
+            s(lc_22_pct, bs = "cr") + s(lc_23_pct, bs = "cr") + s(lc_24_pct, bs = "cr") +
+            s(lc_31_pct, bs = "cr") + s(lc_41_pct, bs = "cr") + s(lc_42_pct, bs = "cr") +
+            s(lc_43_pct, bs = "cr") + s(lc_52_pct, bs = "cr") + s(lc_71_pct, bs = "cr") +
+            s(lc_81_pct, bs = "cr") + s(lc_82_pct, bs = "cr") + s(lc_90_pct, bs = "cr") +
+            s(lc_95_pct, bs = "cr"),
+          family = binomial,
+          data = dat
+        )
+        
+        predict(fit_occur, 
+                newdata = dat %>% mutate(locs = 10, obshrs = 10, events = 10), 
+                type = "response")
+      },
+      error = function(e) { 
+        return(rep(NA, 2000))
+      }
+    )
+    
+    result
+    
+  }
+)
+names(pred_occurrence) <- taxanames
+pred_occurrence <- pred_occurrence %>% as_tibble()
+pred_occurrence <- apply(pred_occurrence, 2, unlist) %>% as_tibble()
+pred_occurrence <- pred_occurrence %>%
+  mutate(sampleID = 1:2000, .before = `21557`)
+```
+
