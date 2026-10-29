@@ -280,3 +280,363 @@ pred_occurrence <- pred_occurrence %>%
   mutate(sampleID = 1:2000, .before = `21557`)
 ```
 
+# NLCD LAND-COVER EXTRACTION - URBANMETRICS
+Input:
+- virginia_nlcd.tif
+- sampleID_buffers.gpkg (layer: sampleid_buffers)
+Outputs:
+- nlcd_all_classes.csv
+- nlcd_buffer_summary.csv
+- nlcd_buffers.gpkg
+Method 1: Developed land-cover percentage (NLCD 21-24)
+Method 2: Class-weighted imperviousness estimate
+
+```{r}
+
+# ---- 1. Environment ----------------------------------------
+
+BASE <- "/RC/group/RC_Walters_Avian/urbanmetrics"
+
+
+
+.libPaths(c(
+  file.path(BASE, "R_library/4.4"),
+  .libPaths()
+))
+
+
+
+suppressPackageStartupMessages({
+  library(sf)
+  library(terra)
+  library(exactextractr)
+})
+
+gis_dir <- file.path(BASE, "data/gis")
+out_dir <- file.path(BASE, "results")
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+buffer_file <- file.path(gis_dir, "sampleID_buffers.gpkg")
+raster_file <- file.path(gis_dir, "virginia_nlcd.tif")
+
+
+
+# ---- 2. Read input data -------------------------------------
+
+# Preserve the actual GeoPackage feature ID.
+
+# 'source_fid' avoids conflicts when writing a new GeoPackage.
+
+buf <- st_read(
+  buffer_file,
+  layer = "sampleid_buffers",
+  fid_column_name = "source_fid",
+  quiet = TRUE
+)
+
+
+
+nlcd <- rast(raster_file)
+
+
+stopifnot(
+  nrow(buf) == 2000,
+  nlyr(nlcd) == 1,
+  all(c("source_fid", "id", "sampleID") %in% names(buf)),
+  !anyNA(buf$source_fid),
+  !anyDuplicated(buf$source_fid),
+  !is.na(st_crs(buf)),
+  !any(st_is_empty(buf)),
+  all(st_is_valid(buf))
+)
+
+
+
+# ---- 3. Check raster characteristics -----------------------
+
+# Categorical NLCD values should be integer class codes.
+# Do not silently process a fractional imperviousness raster.
+
+
+# Geographic raster: use coverage_area = TRUE
+
+if (any(!is.finite(res(nlcd))) || any(res(nlcd) <= 0)) {
+  stop("Invalid raster resolution.")
+}
+
+
+# NLCD class codes are read directly from the raster cells.
+# Do not coerce the entire raster to an in-memory vector.
+
+
+# ---- 4. Match coordinate systems ----------------------------
+
+
+
+if (st_crs(buf) != st_crs(crs(nlcd))) {
+  cat("Transforming buffer CRS to raster CRS...\n")
+  buf <- st_transform(buf, crs(nlcd))
+}
+
+
+
+# Record polygon areas in km2.
+
+buf$buffer_area_km2 <- as.numeric(st_area(buf)) / 1e6
+
+print(summary(buf$buffer_area_km2))
+
+
+
+# Expected approximate area for a 2.5 km circular buffer:
+expected_area <- pi * 2.5^2
+
+
+# ---- 5. NLCD class definitions ------------------------------
+
+
+
+classes <- c(
+  11, 12,
+  21, 22, 23, 24,
+  31,
+  41, 42, 43,
+  52,
+  71, 72, 73, 74,
+  81, 82,
+  90, 95
+)
+
+
+
+class_names <- paste0("lc_", classes, "_pct")
+
+
+
+# Representative percent imperviousness.
+
+# Non-developed classes are assigned zero in this proxy.
+
+imp_weights <- c(
+  "21" = 10,
+  "22" = 35,
+  "23" = 65,
+  "24" = 90
+)
+
+
+
+# ---- 6. Exact polygon extraction ----------------------------
+
+# For projected rasters with metre units, calculate the area
+
+# represented by each full raster pixel.
+# Area weights supplied by exactextractr
+# One output vector is returned for every polygon.
+
+# All polygon boundary pixels are coverage-weighted.
+summarise_polygon <- function(values, coverage_area) {
+
+  result <- setNames(
+    rep(NA_real_, length(classes)),
+    class_names
+  )
+
+
+
+  result <- c(
+    result,
+    other_class_pct = NA_real_,
+    developed_pct = NA_real_,
+    impervious_weighted_pct = NA_real_,
+    valid_area_km2 = 0
+  )
+
+
+
+  if (length(values) == 0) {
+    return(result)
+  }
+
+
+  valid <- !is.na(values) &
+    is.finite(values) &
+    is.finite(coverage_area) &
+    coverage_area > 0
+
+
+
+  if (!any(valid)) {
+    return(result)
+  }
+
+
+ v <- as.numeric(values[valid])
+ w <- coverage_area[valid]
+
+  total <- sum(w)
+
+  # Proportion for every recognised NLCD category.
+  result[class_names] <- vapply(classes, function(k) {
+    100 * sum(w[v == k]) / total
+  }, numeric(1))
+
+
+
+  # Flag unexpected class codes rather than silently losing them.
+  result["other_class_pct"] <-
+    100 * sum(w[!v %in% classes]) / total
+
+
+
+  # Method 1: percentage classified as developed.
+  result["developed_pct"] <-
+    sum(result[paste0("lc_", 21:24, "_pct")])
+
+
+
+  # Method 2: weighted estimate of imperviousness.
+  result["impervious_weighted_pct"] <-
+    sum(
+      result[paste0("lc_", 21:24, "_pct")] *
+        unname(imp_weights[as.character(21:24)])
+    ) / 100
+
+  # Total valid raster area intersecting the polygon.
+
+  result["valid_area_km2"] <- total / 1e6
+  result
+}
+
+
+
+extracted <- exact_extract(
+  nlcd,
+  buf,
+  fun = function(values, coverage_area) as.data.frame(as.list(summarise_polygon(values, coverage_area))),
+  coverage_area = TRUE,
+  progress = TRUE
+)
+
+extracted <- as.data.frame(extracted)
+
+stopifnot(nrow(extracted) == nrow(buf))
+
+
+# ---- 7. Create output tables --------------------------------
+ids <- st_drop_geometry(buf)[
+  , c("source_fid", "id", "sampleID", "buffer_area_km2")
+]
+
+names(ids)[names(ids) == "source_fid"] <- "fid"
+
+all_results <- cbind(ids, extracted)
+
+# Approximate fraction of full buffer area with valid NLCD data.
+all_results$valid_coverage_pct <- pmin(
+  100,
+  100 * all_results$valid_area_km2 /
+    all_results$buffer_area_km2
+)
+
+
+
+# Detect implausible coverage rather than masking it.
+if (any(all_results$valid_coverage_pct < -0.01 |
+        all_results$valid_area_km2 >
+          all_results$buffer_area_km2 * 1.01,
+        na.rm = TRUE)) {
+  warning("Raster coverage and polygon area differ unexpectedly.")
+}
+
+
+
+# One row for each original fid.
+stopifnot(
+  nrow(all_results) == 2000,
+  !anyDuplicated(all_results$fid)
+)
+
+
+
+# Detailed results: all classes and QC metrics.
+write.csv(
+  all_results,
+  file.path(out_dir, "nlcd_all_classes.csv"),
+  row.names = FALSE,
+  na = ""
+)
+
+
+
+# Compact table for subsequent statistical analysis.
+summary_cols <- c(
+  "fid",
+  "id",
+  "sampleID",
+  "buffer_area_km2",
+  "valid_area_km2",
+  "valid_coverage_pct",
+  "developed_pct",
+  "impervious_weighted_pct",
+  paste0("lc_", 21:24, "_pct"),
+  "other_class_pct"
+)
+
+
+summary_results <- all_results[, summary_cols]
+
+
+write.csv(
+  summary_results,
+  file.path(out_dir, "nlcd_buffer_summary.csv"),
+  row.names = FALSE,
+  na = ""
+)
+
+# ---- 8. Save spatial results --------------------------------
+# Keep geometry for later GIS visualisation.
+buf_out <- buf
+
+# Remove source_fid to prevent duplicate GeoPackage FID fields.
+buf_out$source_fid <- NULL
+
+# Add the extracted attributes by row order; extraction preserves
+# the input feature order.
+for (nm in names(extracted)) {
+  buf_out[[nm]] <- extracted[[nm]]
+}
+
+buf_out$valid_coverage_pct <- all_results$valid_coverage_pct
+
+
+
+# Preserve original feature ID as an ordinary attribute.
+
+buf_out$buffer_fid <- all_results$fid
+
+st_write(
+  buf_out,
+  file.path(out_dir, "nlcd_buffers.gpkg"),
+  layer = "nlcd_buffers",
+  delete_dsn = TRUE,
+  quiet = TRUE
+
+)
+
+
+# Check that class percentages sum to approximately 100%.
+
+class_total <- rowSums(
+  all_results[, c(class_names, "other_class_pct")],
+  na.rm = FALSE
+)
+
+bad_sums <- sum(
+  !is.na(class_total) & abs(class_total - 100) > 0.01
+)
+
+if (bad_sums > 0) {
+  stop("Some NLCD class percentages do not sum to 100%.")
+}
+
+```
