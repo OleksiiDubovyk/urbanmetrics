@@ -280,7 +280,10 @@ pred_occurrence <- pred_occurrence %>%
   mutate(sampleID = 1:2000, .before = `21557`)
 ```
 
-# NLCD LAND-COVER EXTRACTION - URBANMETRICS
+# Urban metrics
+
+## NLCD LAND-COVER EXTRACTION - URBANMETRICS
+
 Input:
 - virginia_nlcd.tif
 - sampleID_buffers.gpkg (layer: sampleid_buffers)
@@ -641,8 +644,8 @@ if (bad_sums > 0) {
 
 ```
 
-## sbatch job (NCLD extration)
-```{r}
+
+```{bash eval = F}
 #!/bin/bash
 #SBATCH --job-name=nlcd_buffers
 #SBATCH --partition=main
