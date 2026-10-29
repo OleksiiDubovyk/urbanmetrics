@@ -640,3 +640,22 @@ if (bad_sums > 0) {
 }
 
 ```
+
+## sbatch job (NCLD extration)
+```{r}
+#!/bin/bash
+#SBATCH --job-name=nlcd_buffers
+#SBATCH --partition=main
+#SBATCH --cpus-per-task=20
+#SBATCH --mem=300G
+#SBATCH --time=04:00:00
+#SBATCH --output=/RC/group/RC_Walters_Avian/urbanmetrics/logs/nlcd_%j.out
+#SBATCH --error=/RC/group/RC_Walters_Avian/urbanmetrics/logs/nlcd_%j.err
+set -euo pipefail
+BASE=/RC/group/RC_Walters_Avian/urbanmetrics
+module load container_env/0.1
+module load R/4.5.1
+export R_LIBS_USER="$BASE/R_library/4.4"
+export OMP_NUM_THREADS="$SLURM_CPUS_PER_TASK"
+crun.R Rscript "$BASE/scripts/extract_nlcd.R"
+```
