@@ -662,3 +662,56 @@ export R_LIBS_USER="$BASE/R_library/4.4"
 export OMP_NUM_THREADS="$SLURM_CPUS_PER_TASK"
 crun.R Rscript "$BASE/scripts/extract_nlcd.R"
 ```
+
+#NDVI
+
+NDVI was derived from Sentinel-2 imagery in Google Earth Engine using the following code:
+
+```{js eval=F}
+/**
+ * Function to mask clouds using the Sentinel-2 QA band
+ * @param {ee.Image} image Sentinel-2 image
+ * @return {ee.Image} cloud masked Sentinel-2 image
+ */
+function maskS2clouds(image) {
+  var qa = image.select('QA60');
+
+  // Bits 10 and 11 are clouds and cirrus, respectively.
+  var cloudBitMask = 1 << 10;
+  var cirrusBitMask = 1 << 11;
+
+  // Both flags should be set to zero, indicating clear conditions.
+  var mask = qa.bitwiseAnd(cloudBitMask).eq(0)
+      .and(qa.bitwiseAnd(cirrusBitMask).eq(0));
+
+  return image.updateMask(mask).divide(10000);
+}
+
+var dataset = ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED')
+                  .filterBounds(geometry)
+                  .filterDate('2020-03-15', '2020-08-30')
+                  // Pre-filter to get less cloudy granules.
+                  .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE',20))
+                  .map(maskS2clouds);
+
+var S2_median = dataset.mean();
+
+var S2_ndvi = S2_median.expression('(b("B8") - b("B4")) / (b("B4") + b("B8"))').rename('S2_ndvi');
+
+Map.addLayer(S2_ndvi)
+
+Export.image.toDrive({
+  image: S2_ndvi.clip(geometry), // clip raster by geometry (mask)
+  description: 'NDVI',
+  folder: 'GEE_data',
+  scale: 1000,
+  region: geometry,
+  crs: 'EPSG:4326',
+  maxPixels: 1e10,
+  fileFormat: 'GeoTIFF',
+  formatOptions: {
+    cloudOptimized: true
+  }
+  });
+```
+
