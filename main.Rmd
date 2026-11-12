@@ -715,3 +715,80 @@ Export.image.toDrive({
   });
 ```
 
+# EVI
+
+The GEE to obtain EVI:
+
+```{js eval=F}
+var dataset = ee.ImageCollection('MODIS/MOD09GA_006_EVI')
+                  .filter(ee.Filter.date('2020-03-15', '2020-08-30'));
+var img = dataset.select('EVI').reduce(ee.Reducer.median()).clip(geometry);
+
+Export.image.toDrive({
+  image: img, // clip raster by geometry (mask)
+  description: 'EVI',
+  folder: 'GEE_data',
+  scale: 60,
+  region: geometry,
+  crs: 'EPSG:4326',
+  maxPixels: 1e10,
+  fileFormat: 'GeoTIFF',
+  formatOptions: {
+    cloudOptimized: true
+  }
+  });
+  
+  
+var colorizedVis = {
+  min: 0,
+  max: 1,
+  palette: [
+    'ffffff', 'ce7e45', 'df923d', 'f1b555', 'fcd163', '99b718', '74a901',
+    '66a000', '529400', '3e8601', '207401', '056201', '004c00', '023b01',
+    '012e01', '011d01', '011301'
+  ],
+};
+
+Map.addLayer(img, colorizedVis, 'Colorized');
+```
+
+# MCD12Q1 LC_Type2
+
+```{js eval=F}
+var year = 2020;
+
+var dataset = ee.ImageCollection('MODIS/061/MCD12Q1');
+var igbpLandCover = dataset.select('LC_Type2');
+var igbpLandCoverVis = {
+  min: 1.0,
+  max: 17.0,
+  palette: [
+    '05450a', '086a10', '54a708', '78d203', '009900', 'c6b044', 'dcd159',
+    'dade48', 'fbff13', 'b6ff05', '27ff87', 'c24f44', 'a5a5a5', 'ff6d4c',
+    '69fff8', 'f9ffa4', '1c0dff'
+  ],
+};
+//Map.setCenter(6.746, 46.529, 6);
+//Map.addLayer(igbpLandCover, igbpLandCoverVis, 'IGBP Land Cover');
+
+var date = year+'-01-01';
+
+var img = igbpLandCover.filterDate(date).reduce(ee.Reducer.median()).clip(geometry);
+Map.addLayer(img, igbpLandCoverVis, 'LandCover');
+print(img);
+
+Export.image.toDrive({
+  image: img,
+  description: 'MCD12'+year,
+  folder: 'GEE_data',
+  scale: 500,
+  region: geometry,
+  crs: 'EPSG:4326',
+  maxPixels: 1e10,
+  fileFormat: 'GeoTIFF',
+  formatOptions: {
+    cloudOptimized: false
+  }
+  });
+```
+
