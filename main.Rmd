@@ -792,3 +792,41 @@ Export.image.toDrive({
   });
 ```
 
+# Human population
+
+```{js eval=F}
+var dataset = ee.ImageCollection('CIESIN/GPWv411/GPW_Population_Density').first();
+var img = dataset.select('population_density').reduce(ee.Reducer.median()).clip(geometry);
+var raster_vis = {
+  'max': 1000.0,
+  'palette': [
+    'ffffe7',
+    'FFc869',
+    'ffac1d',
+    'e17735',
+    'f2552c',
+    '9f0c21'
+  ],
+  'min': 200.0
+};
+Map.addLayer(img, raster_vis, 'population_density');
+Export.image.toDrive({
+  image: img, // clip raster by geometry (mask)
+  description: 'population',
+  folder: 'GEE_data',
+  scale: 1000,
+  region: geometry,
+  crs: 'EPSG:4326',
+  maxPixels: 1e10,
+  fileFormat: 'GeoTIFF',
+  formatOptions: {
+    cloudOptimized: true
+  }
+  });
+
+```
+
+# Median income 
+
+From US Census data: https://hub.arcgis.com/maps/trubel::median-household-income-by-census-tract/about.
+
