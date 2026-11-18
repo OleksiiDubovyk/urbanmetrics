@@ -830,3 +830,30 @@ Export.image.toDrive({
 
 From US Census data: https://hub.arcgis.com/maps/trubel::median-household-income-by-census-tract/about.
 
+# Artificial light
+
+ALAN was also pulled through GEE.
+
+```{js eval=F}
+var dataset = ee.ImageCollection('NOAA/VIIRS/DNB/MONTHLY_V1/VCMCFG')
+                  .filter(ee.Filter.date('2020-03-01', '2020-09-01'));
+var img = dataset.select('avg_rad').reduce(ee.Reducer.median()).clip(geometry);
+
+Export.image.toDrive({
+  image: img,
+  description: 'ALAN',
+  folder: 'GEE_data',
+  scale: 60,
+  region: geometry,
+  crs: 'EPSG:4326',
+  maxPixels: 1e10,
+  fileFormat: 'GeoTIFF',
+  formatOptions: {
+    cloudOptimized: true
+  }
+  });
+  
+var nighttimeVis = {min: 0.0, max: 60.0};
+Map.addLayer(img, nighttimeVis, 'Nighttime');
+```
+
